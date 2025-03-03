@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Scraper Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .scrape-form {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .scrape-form input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+        }
+        .results {
+            display: grid;
+            gap: 20px;
+        }
+        .result-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .result-card h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .summary {
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #eee;
+            margin-top: 10px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .loading {
+            display: none;
+            margin: 10px 0;
+            color: #666;
+        }
+        .loading.active {
+            display: block;
+        }
+        .error {
+            color: #dc3545;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8d7da;
+            border-radius: 4px;
+            display: none;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Web Scraper</h1>
+        
+        <div id="connectionStatus" class="status disconnected">
+            Disconnected
+        </div>
+
+        <div class="controls">
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+            <button onclick="clearResults()">Clear Results</button>
+        </div>
+
+        <div class="scrape-form">
+            <input type="url" id="urlInput" placeholder="Enter URL to scrape (e.g., https://example.com)" required>
+            <input type="text" id="selectorInput" placeholder="CSS Selector (optional, e.g., article.content)">
+            <button onclick="startScrape()">Scrape Website</button>
+        </div>
+
+        <div id="loading" class="loading">
+            Scraping website... Please wait...
+        </div>
+
+        <div id="error" class="error"></div>
+
+        <div id="results" class="results">
+            <!-- Results will be added here -->
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+
+        // Helper function to safely decode base64 to Unicode string
+        function decodeUnicode(str) {
+            // First decode base64 to bytes
+            const binaryStr = atob(str);
+            const bytes = Uint8Array.from(binaryStr, char => char.charCodeAt(0));
+            // Convert bytes back to string
+            return new TextDecoder().decode(bytes);
+        }
+
+        function updateStatus(connected) {
+            const status = document.getElementById('connectionStatus');
+            status.textContent = connected ? 'Connected' : 'Disconnected';
+            status.className = `status ${connected ? 'connected' : 'disconnected'}`;
+        }
+
+        function connect() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource('http://localhost:8000/events');
+            
+            eventSource.onopen = () => {
+                updateStatus(true);
+                showError('');
+            };
+
+            eventSource.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleMessage(message);
+            };
+
+            eventSource.onerror = () => {
+                updateStatus(false);
+                showError('Connection error. Please try reconnecting.');
+                eventSource.close();
+                eventSource = null;
+            };
+        }
+
+        function disconnect() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                updateStatus(false);
+            }
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = message ? 'block' : 'none';
+        }
+
+        function setLoading(isLoading) {
+            document.getElementById('loading').className = `loading ${isLoading ? 'active' : ''}`;
+        }
+
+        async function startScrape() {
+            const url = document.getElementById('urlInput').value;
+            const selector = document.getElementById('selectorInput').value;
+
+            if (!url) {
+                showError('Please enter a URL');
+                return;
+            }
+
+            try {
+                setLoading(true);
+                showError('');
+
+                const response = await fetch('http://localhost:8000/scrape', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url,
+                        selector: selector || undefined,
+                    }),
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to start scraping');
+                }
+            } catch (error) {
+                showError(error.message);
+                setLoading(false);
+            }
+        }
+
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'scrape_start':
+                    setLoading(true);
+                    break;
+
+                case 'scrape_result':
+                    setLoading(false);
+                    addResult(message.payload);
+                    break;
+
+                case 'scrape_error':
+                    setLoading(false);
+                    showError(message.payload.error);
+                    break;
+            }
+        }
+
+        function addResult(result) {
+            const resultsDiv = document.getElementById('results');
+            
+            const resultCard = document.createElement('div');
+            resultCard.className = 'result-card';
+            
+            const timestamp = new Date().toLocaleTimeString();
+            
+            resultCard.innerHTML = `
+                <h3>${result.url}</h3>
+                <div>Scraped at: ${timestamp}</div>
+                <div class="summary">
+                    <strong>Summary:</strong>
+                    <p>${result.summary}</p>
+                </div>
+                <button onclick="toggleFullContent(this)">Show Full Content</button>
+                <div class="full-content" style="display: none;">
+                    <hr>
+                    <strong>Full Content:</strong>
+                    <p>${decodeUnicode(result.fullContent)}</p>
+                </div>
+            `;
+            
+            resultsDiv.insertBefore(resultCard, resultsDiv.firstChild);
+        }
+
+        function toggleFullContent(button) {
+            const fullContent = button.nextElementSibling;
+            const isHidden = fullContent.style.display === 'none';
+            fullContent.style.display = isHidden ? 'block' : 'none';
+            button.textContent = isHidden ? 'Hide Full Content' : 'Show Full Content';
+        }
+
+        // Connect on page load
+        connect();
+    </script>
+</body>
+</html> 
